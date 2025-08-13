@@ -1,15 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['run.py'],
     pathex=[],
     binaries=[],
-    datas=[('lp_list.json', '.'), ('templates', 'templates')],
+    # Only include iframe.html and put it under "templates" for Flask
+    datas=[('iframe.html', 'templates')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['rt_copy_lp.py'],
+    runtime_hooks=[],   # no rt_copy_lp.py needed anymore
     excludes=[],
     noarchive=False,
     optimize=0,
@@ -22,17 +22,12 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='run',
+    name='LP_News_Scraper',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    runtime_tmpdir=None,   # extract to temp (good for Flask templates)
+    console=False          # no console window
 )

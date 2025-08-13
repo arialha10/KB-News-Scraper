@@ -8,6 +8,11 @@ from datetime import datetime  # 기본값 설정용 (datetime.min 등)
 from email.utils import parsedate_to_datetime  # Naver pubDate 파싱용
 import re
 from html import unescape
+try:
+    import winreg  # Windows-only; used to persist LP list without user files
+    HAS_WINREG = True
+except Exception:
+    HAS_WINREG = False
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -956,8 +961,8 @@ TEMPLATE = r'''
         if (willActivate) {
           // Compute LPs that would be added for this category
           const toAdd = [];
-          document.querySelectorAll('.lp-button').forEach(lpBtn => {
-            if (lpBtn.getAttribute('data-keywords').includes(category)) {
+        document.querySelectorAll('.lp-button').forEach(lpBtn => {
+          if (lpBtn.getAttribute('data-keywords').includes(category)) {
               const name = lpBtn.textContent.trim();
               if (!selectedLPs.has(name)) toAdd.push(name);
             }
@@ -967,8 +972,8 @@ TEMPLATE = r'''
             // Do not activate this category; remove the latest chosen category (this one just clicked)
             // and inform the user gently
             showNotification('최대 30개까지만 선택할 수 있습니다. 방금 선택한 카테고리를 해제했습니다.', 'error');
-            return;
-          }
+                  return;
+                }
 
           // Activate category and select its LPs
           button.classList.add('active');
@@ -980,8 +985,8 @@ TEMPLATE = r'''
           });
           if (!selectedCategoriesOrder.includes(category)) {
             selectedCategoriesOrder.push(category);
-          }
-        } else {
+              }
+            } else {
           // Deactivate: remove LPs within the category
           button.classList.remove('active');
           document.querySelectorAll('.lp-button').forEach(lpBtn => {
@@ -992,7 +997,7 @@ TEMPLATE = r'''
             }
           });
           selectedCategoriesOrder = selectedCategoriesOrder.filter(c => c !== category);
-        }
+          }
       });
     });
 
@@ -1107,7 +1112,7 @@ TEMPLATE = r'''
       const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
       currentPage = Math.min(Math.max(1, page), totalPages);
       newsContainer.innerHTML = '';
-
+      
       const start = (currentPage - 1) * PAGE_SIZE;
       const end = Math.min(start + PAGE_SIZE, total);
       const slice = allArticles.slice(start, end);
@@ -1117,7 +1122,7 @@ TEMPLATE = r'''
         const articleCard = document.createElement('div');
         articleCard.className = 'article-card card fade-in';
         articleCard.style.animationDelay = `${idx * 0.03}s`;
-
+        
         articleCard.innerHTML = `
           <div class="card-body">
             <h5 class="card-title">
@@ -1199,40 +1204,68 @@ TEMPLATE = r'''
 
 
     
-    function attachLikeButtonListeners() {
-      const liked = JSON.parse(localStorage.getItem("likedArticles") || "[]");
-      document.querySelectorAll(".like-btn").forEach(btn => {
-        // Ensure datasets exist and are plain text
-        const title = (btn.dataset.title || '').toString();
-        const link = (btn.dataset.link || '').toString();
-        const isLiked = liked.some(article => article.link === link);
-        if (isLiked) {
-          btn.classList.remove("btn-outline-danger");
-          btn.classList.add("btn-success");
-          btn.textContent = "❤️ 찜됨";
-        }
+    
+    function getLikeKey(title, link) {
+      if (link && link !== '#') return link;
+      return 'ttl:' + (title || '').toLowerCase();
+    }
 
-        btn.addEventListener("click", () => {
-          const currentLiked = JSON.parse(localStorage.getItem("likedArticles") || "[]");
-          const index = currentLiked.findIndex(article => article.link === link);
-          if (index === -1) {
-            currentLiked.push({ title: title, link: link });
-            localStorage.setItem("likedArticles", JSON.stringify(currentLiked));
-            btn.classList.remove("btn-outline-danger");
-            btn.classList.add("btn-success");
-            btn.textContent = "❤️ 찜됨";
-          } else {
-            currentLiked.splice(index, 1);
-            localStorage.setItem("likedArticles", JSON.stringify(currentLiked));
-            btn.classList.remove("btn-success");
-            btn.classList.add("btn-outline-danger");
-            btn.textContent = "❤️";
-          }
-          loadLikedArticles();
-        });
+    function isArticleLiked(title, link) {
+      const liked = JSON.parse(localStorage.getItem("likedArticles") || "[]");
+      const key = getLikeKey(title, link);
+      return liked.some(a => getLikeKey(a.title, a.link) === key);
+    }
+
+    function toggleLike(title, link) {
+      const key = getLikeKey(title, link);
+      const liked = JSON.parse(localStorage.getItem("likedArticles") || "[]");
+      const idx = liked.findIndex(a => getLikeKey(a.title, a.link) === key);
+      if (idx === -1) {
+        liked.push({ title: title || 'Untitled', link: link || '#' });
+      } else {
+        liked.splice(idx, 1);
+      }
+      localStorage.setItem("likedArticles", JSON.stringify(liked));
+      loadLikedArticles();
+    }
+
+    // Delegated like handling for dynamically rendered cards
+    function attachLikeButtonListeners() {
+      const container = document.getElementById('newsContainer');
+      if (!container) return;
+      container.removeEventListener('click', __likeDelegator, true);
+      container.addEventListener('click', __likeDelegator, true);
+      // initialize buttons to current like state
+      container.querySelectorAll('.like-btn').forEach(btn => {
+        const t = (btn.dataset.title || '').toString();
+        const l = (btn.dataset.link || '').toString();
+        if (isArticleLiked(t, l)) {
+          btn.classList.add('btn-success');
+          btn.textContent = '❤️ 찜됨';
+        } else {
+          btn.classList.remove('btn-success');
+          btn.textContent = '❤️';
+        }
       });
     }
-    
+
+    function __likeDelegator(e) {
+      const btn = e.target.closest('.like-btn');
+      if (!btn) return;
+      e.preventDefault();
+      const title = (btn.dataset.title || '').toString();
+      const link = (btn.dataset.link || '').toString();
+      toggleLike(title, link);
+      if (isArticleLiked(title, link)) {
+        btn.classList.add('btn-success');
+        btn.textContent = '❤️ 찜됨';
+      } else {
+        btn.classList.remove('btn-success');
+        btn.textContent = '❤️';
+      }
+    }
+
+
     function showNotification(message, type = 'info') {
       const notification = document.createElement('div');
       notification.className = `notification notification-${type} slide-in`;
@@ -1310,6 +1343,14 @@ TEMPLATE = r'''
           const updated = likedArticles.filter(a => a.link !== article.link);
           localStorage.setItem("likedArticles", JSON.stringify(updated));
           loadLikedArticles();
+
+          // ✅ Reset the like button in the feed
+          const likeBtnInFeed = document.querySelector(`.like-btn[data-link="${CSS.escape(article.link)}"]`);
+          if (likeBtnInFeed) {
+            likeBtnInFeed.classList.remove("btn-success");
+            likeBtnInFeed.classList.add("btn-outline-danger");
+            likeBtnInFeed.textContent = "❤️";
+          }
         };
 
         li.appendChild(link);
@@ -1508,7 +1549,7 @@ TEMPLATE = r'''
       const minTop = 5;
       const maxTop = 60;
       const newTop = Math.max(minTop, maxTop - scrollY);
-    document.documentElement.style.setProperty("--lp-top-offset", `${newTop}px`);
+      document.documentElement.style.setProperty("--lp-top-offset", `${newTop}px`);
     });
 
     // LP list text filter
@@ -1538,7 +1579,71 @@ TEMPLATE = r'''
       input.addEventListener('input', updateVisibility);
       updateVisibility();
     })();
-  </script>
+  
+
+    // --- Global delegated listeners for like/save and saved-remove ---
+    document.addEventListener('click', (e) => {
+      const likeBtn = e.target.closest('[data-role="like-toggle"]');
+      if (likeBtn) {
+        const key = likeBtn.getAttribute('data-save-key');
+        const card = likeBtn.closest('.news-card');
+        const title = card?.querySelector('.news-title')?.textContent?.trim() || likeBtn.getAttribute('data-title') || '';
+        const link = card?.getAttribute('data-link') || likeBtn.getAttribute('data-link') || '';
+        const list = getSaved();
+        const idx = list.findIndex(x => x.key === key);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          setSaved(list);
+          updateLikeBtnEl(likeBtn, false);
+        } else {
+          list.push({ key, title, link });
+          setSaved(list);
+          updateLikeBtnEl(likeBtn, true);
+        }
+        try { renderSavedList && renderSavedList(); } catch {}
+        return;
+      }
+      const rmBtn = e.target.closest('[data-role="saved-remove"]');
+      if (rmBtn) {
+        const key = rmBtn.getAttribute('data-save-key');
+        const next = getSaved().filter(x => x.key !== key);
+        setSaved(next);
+        try { renderSavedList && renderSavedList(); } catch {}
+        const originalLike = findLikeBtnByKey(key);
+        if (originalLike) updateLikeBtnEl(originalLike, false);
+        return;
+      }
+    });
+
+    function renderSavedList() {
+      const el = document.getElementById('savedList');
+      if (!el) return;
+      const saved = getSaved();
+      if (saved.length === 0) {
+        el.innerHTML = '<div class="saved-empty">저장한 뉴스가 없습니다.</div>';
+        return;
+      }
+      el.innerHTML = saved.map(s => `
+        <div class="saved-row">
+          <a class="saved-link" href="${s.link || '#'}" target="_blank" rel="noreferrer noopener">${s.title}</a>
+          <button class="saved-remove-btn" data-role="saved-remove" data-save-key="${s.key}">삭제</button>
+        </div>
+      `).join('');
+    }
+    
+
+    // Sync like buttons with saved state on any content refresh
+    function syncLikeButtonsWithSaved() {
+      const savedArr = getSaved();
+      const savedSet = new Set(savedArr.map(s => s.key));
+      document.querySelectorAll('[data-role="like-toggle"]').forEach(btn => {
+        const key = btn.getAttribute('data-save-key');
+        updateLikeBtnEl(btn, savedSet.has(key));
+      });
+    }
+    // Run sync after DOM ready and after any major renders
+    document.addEventListener('DOMContentLoaded', () => { try { syncLikeButtonsWithSaved(); } catch {} });
+</script>
 </body>
 </html>
 '''
@@ -1579,7 +1684,132 @@ def kpasset():
 def kofia():
   return render_template('iframe.html', iframe_url='https://www.kofia.or.kr/brd/m_212/list.do')
 
-LP_LIST_FILE = 'lp_list.json'
+LP_LIST_FILE = 'lp_list.json'  # legacy; not used when registry persistence is enabled
+
+# Embedded default LP list so no external file is required at deployment
+DEFAULT_LP_LIST = [
+  {"name": "사학연금", "eng_name": "Teachers Pension", "abbr1": "TP", "abbr2": "KTP", "category": "연기금"},
+  {"name": "공무원연금", "eng_name": "Government Employees Pension Service", "abbr1": "GEPS", "category": "연기금"},
+  {"name": "미래에셋증권 OCIO 고용기금 EIF", "eng_name": "Mirae Asset Securities Employment Insurance Fund", "abbr1": "Mirae Asset Securities EIF", "category": "연기금"},
+  {"name": "미래에셋자산운용 국토부 주택도시기금 MOEL", "eng_name": "Mirae Asset AM Ministry of Employment and Labor", "abbr1": "Mirae Asset AM MOEL", "category": "연기금"},
+  {"name": "NH투자증권 국토부 주택도시기금 MOEL", "eng_name": "NH Securities Ministry of Employment and Labor", "abbr1": "NH Securities MOEL", "category": "연기금"},
+  {"name": "우정사업본부", "eng_name": "K-Post Insurance", "abbr1": "우체국 보험", "category": "연기금"},
+  {"name": "한국교직원공제회", "eng_name": "Korea teachers' Credit Union", "abbr1": "KTCU", "category": "공제회/조합"},
+  {"name": "전문건설공제회", "eng_name": "Korea Finance for Construction", "abbr1": "K-FINCO", "category": "공제회/조합"},
+  {"name": "건설근로자공제회", "eng_name": "Construction Workers Mutual Aid Association", "abbr1": "CWMA", "category": "공제회/조합"},
+  {"name": "행정공제회", "eng_name": "Public Officials Benefit Association", "abbr1": "POBA", "category": "공제회/조합"},
+  {"name": "경찰공제회", "eng_name": "The Police Mutual Aid Association", "abbr1": "PMAA", "category": "공제회/조합"},
+  {"name": "과학기술인공제회", "eng_name": "Korea Scientists & Engineers Mutual Aid Association", "abbr1": "SEMA", "category": "공제회/조합"},
+  {"name": "군인공제회", "eng_name": "Military Mutual Aid Association", "abbr1": "MMAA", "category": "공제회/조합"},
+  {"name": "엔지니어링공제조합", "eng_name": "Engineering Guarantee Insurance", "abbr1": "EGI", "category": "공제회/조합"},
+  {"name": "소방공제회", "eng_name": "Korea Fire Officials Credit Union", "abbr1": "FOCU", "category": "공제회/조합"},
+  {"name": "한국지방재정공제회", "eng_name": "Local Finance Association", "abbr1": "LOFA", "category": "공제회/조합"},
+  {"name": "기계설비건설조합", "eng_name": "", "abbr1": "", "category": "공제회/조합"},
+  {"name": "새마을금고복지회", "eng_name": "", "abbr1": "", "category": "공제회/조합"},
+  {"name": "수협중앙회", "eng_name": "National Federation of Fisheries Cooperatives", "abbr1": "NFFC", "category": "중앙회"},
+  {"name": "농협중앙회", "eng_name": "National Agricultural Cooperative Federation", "abbr1": "NACF", "category": "중앙회"},
+  {"name": "신협중앙회", "eng_name": "National Credit Union Federation of Korea", "abbr1": "CU", "category": "중앙회"},
+  {"name": "중소기업중앙회", "eng_name": "Korea Federation of Small and Medium Business", "abbr1": "K-BIZ", "category": "중앙회"},
+  {"name": "산림조합중앙회", "eng_name": "National Foresty Cooperatives Federation", "abbr1": "NFCF", "category": "중앙회"},
+  {"name": "코리안리", "eng_name": "KoreanRe", "abbr1": "", "category": "보험사"},
+  {"name": "서울보증보험", "eng_name": "Seoul Guarantee Insurance", "abbr1": "SGIC", "category": "보험사"},
+  {"name": "NH생명", "eng_name": "NH Life", "abbr1": "", "category": "보험사"},
+  {"name": "미래에셋생명", "eng_name": "Mirae Asset Life", "abbr1": "", "category": "보험사"},
+  {"name": "라이나생명", "eng_name": "LINA Korea", "abbr1": "", "category": "보험사"},
+  {"name": "KDB생명", "eng_name": "KDB Life", "abbr1": "", "category": "보험사"},
+  {"name": "교보생명", "eng_name": "Kyobo Life", "abbr1": "", "category": "보험사"},
+  {"name": "하나생명", "eng_name": "Hana Life", "abbr1": "", "category": "보험사"},
+  {"name": "IM라이프", "eng_name": "IM Life(DGB Life)", "abbr1": "", "category": "보험사"},
+  {"name": "한화생명", "eng_name": "Hanwha Life", "abbr1": "", "category": "보험사"},
+  {"name": "푸본현대생명", "eng_name": "Fubon Hyundai Life", "abbr1": "", "category": "보험사"},
+  {"name": "신한라이프", "eng_name": "Shinhan Life", "abbr1": "", "category": "보험사"},
+  {"name": "삼성생명", "eng_name": "Samsung Life", "abbr1": "", "category": "보험사"},
+  {"name": "동양생명", "eng_name": "Tong Yang Life", "abbr1": "", "category": "보험사"},
+  {"name": "흥국생명", "eng_name": "Heungkuk Life", "abbr1": "", "category": "보험사"},
+  {"name": "NH손보", "eng_name": "NH Property & Casualty Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "한화손보", "eng_name": "Hanwha General Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "MG손보", "eng_name": "MG Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "DB손보", "eng_name": "DB Insurance", "abbr1": "DB LDI", "category": "보험사"},
+  {"name": "DB생명", "eng_name": "DB Life", "abbr1": "DB LDI", "category": "보험사"},
+  {"name": "농협손보", "eng_name": "NH Property & Casualty Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "롯데손보", "eng_name": "Lotte Non-Life Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "삼성화재", "eng_name": "Smasung Fire & Marine Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "흥국화재", "eng_name": "Heungkuk fire & Marine Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "메리츠화재", "eng_name": "Meritz Fire & Fire Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "현대해상", "eng_name": "Hyundai Marine & Fire Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "IBK연금보험", "eng_name": "IBK Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "하나손보", "eng_name": "Hana Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "ABL생명", "eng_name": "ABL Life Insurance", "abbr1": "", "category": "보험사"},
+  {"name": "프리드라이프", "eng_name": "Preedlife", "abbr1": "", "category": "보험사"},
+  {"name": "우리은행", "eng_name": "Woori Bank", "abbr1": "", "category": "은행"},
+  {"name": "하나은행", "eng_name": "KEB Hana Bank", "abbr1": "", "category": "은행"},
+  {"name": "신한은행", "eng_name": "Shinhan Bank", "abbr1": "", "category": "은행"},
+  {"name": "DGB은행", "eng_name": "DaeGue Bank(IM Bank)", "abbr1": "", "category": "은행"},
+  {"name": "IBK 기업은행", "eng_name": "Industrial Bank of Korea", "abbr1": "IBK", "category": "은행"},
+  {"name": "KB은행", "eng_name": "KB Bank", "abbr1": "", "category": "은행"},
+  {"name": "NH농협은행", "eng_name": "NH Bank", "abbr1": "", "category": "은행"},
+  {"name": "KDB 은행", "eng_name": "Korea Development Bank", "abbr1": "KDB", "category": "은행"},
+  {"name": "MG새마을금고", "eng_name": "Korean Federation of Community Credit Cooperatives", "abbr1": "KFCC", "category": "은행"},
+  {"name": "삼성증권", "eng_name": "Samsung Securities", "abbr1": "", "category": "증권사"},
+  {"name": "NH투자증권", "eng_name": "NH Investment & Securities", "abbr1": "", "category": "증권사"},
+  {"name": "신한투자증권", "eng_name": "Shinhan Securities", "abbr1": "", "category": "증권사"},
+  {"name": "미래에셋증권", "eng_name": "Mirae Asset Securities", "abbr1": "", "category": "증권사"},
+  {"name": "하나증권", "eng_name": "Hana Financial Investment", "abbr1": "", "category": "증권사"},
+  {"name": "한국투자증권", "eng_name": "Korea Investment & Securities", "abbr1": "KIS", "category": "증권사"},
+  {"name": "KB증권 WM상품부", "eng_name": "KB Securities Wealth Management Business Uni", "abbr1": "", "category": "증권사"},
+  {"name": "KB증권", "eng_name": "KB Securities", "abbr1": "", "category": "증권사"},
+  {"name": "미래에셋자산운용", "eng_name": "Mirae Asset Global Investments", "abbr1": "", "category": "운용사"},
+  {"name": "삼성자산운용", "eng_name": "Samsung Asset Management", "abbr1": "", "category": "운용사"},
+  {"name": "신한자산운용", "eng_name": "Shinhan Asset Management", "abbr1": "", "category": "운용사"},
+  {"name": "KB자산운용", "eng_name": "KB Asset Management", "abbr1": "", "category": "운용사"},
+  {"name": "DB자산운용", "eng_name": "Dongbu Asset Management", "abbr1": "", "category": "운용사"},
+  {"name": "삼성SRA자산운용", "eng_name": "Samsung SRA Asset Management", "abbr1": "", "category": "운용사"},
+  {"name": "파인스트리트 자산운용", "eng_name": "PineStreet Asset Management", "abbr1": "", "category": "운용사"},
+  {"name": "한국투자신탁운용", "eng_name": "Korea Investment Management", "abbr1": "", "category": "운용사"},
+  {"name": "NH아문디 자산운용", "eng_name": "", "abbr1": "", "category": "운용사"},
+  {"name": "키움자산운용", "eng_name": "", "abbr1": "", "category": "운용사"},
+  {"name": "이지스자산운용", "eng_name": "", "abbr1": "", "category": "운용사"},
+  {"name": "보고자산운용", "eng_name": "", "abbr1": "", "category": "운용사"},
+  {"name": "신한캐피탈", "eng_name": "Shinhan Capital", "abbr1": "", "category": "캐피탈"},
+  {"name": "IBK캐피탈", "eng_name": "IBK Capital", "abbr1": "", "category": "캐피탈"},
+  {"name": "현대커머셜", "eng_name": "Hyundai Commercial Inc", "abbr1": "", "category": "캐피탈"},
+  {"name": "현대카드", "eng_name": "Hyundai Card", "abbr1": "", "category": "캐피탈"},
+  {"name": "NH캐피탈", "eng_name": "NongHyup Capital", "abbr1": "", "category": "캐피탈"},
+  {"name": "KB캐피탈", "eng_name": "KB Capital", "abbr1": "", "category": "캐피탈"},
+  {"name": "성담", "eng_name": "Sungdam", "abbr1": "", "category": "기타"},
+  {"name": "KT&G", "eng_name": "Korea Tomorrow & Global Corporation", "abbr1": "KT&G", "category": "기타"},
+  {"name": "한국벤처투자", "eng_name": "", "abbr1": "", "category": "기타"},
+  {"name": "Company H", "eng_name": "Company H", "abbr1": "", "category": "기타"},
+  {"name": "TCK", "eng_name": "Topor and Korea Asset Management", "abbr1": "TCK", "category": "기타"},
+  {"name": "교원인베스트", "eng_name": "Kyowon Invest", "abbr1": "", "category": "기타"},
+  {"name": "포스텍 재단", "eng_name": "", "abbr1": "", "category": "기타"}
+]
+
+# Registry persistence helpers (Windows)
+REG_PATH = r"Software\\NewsScraper"
+REG_VALUE = "lp_list_json"
+
+def _read_lp_list_from_registry():
+    if not HAS_WINREG:
+        return None
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH)
+        value, _ = winreg.QueryValueEx(key, REG_VALUE)
+        winreg.CloseKey(key)
+        return json.loads(value)
+    except Exception:
+        return None
+
+def _write_lp_list_to_registry(items: list) -> bool:
+    if not HAS_WINREG:
+        return False
+    try:
+        key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PATH)
+        winreg.SetValueEx(key, REG_VALUE, 0, winreg.REG_SZ, json.dumps(items, ensure_ascii=False))
+        winreg.CloseKey(key)
+        return True
+    except Exception:
+        return False
 
 def _sanitize_text(value):
     if value is None:
@@ -1600,13 +1830,10 @@ def sanitize_lp_entry(entry: dict) -> dict:
 
 
 def load_lp_list() -> list:
-    try:
-        with open(LP_LIST_FILE, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
-            if not isinstance(raw, list):
-                return []
-    except Exception:
-        return []
+    # Prefer registry persistence; fallback to embedded defaults
+    raw = _read_lp_list_from_registry()
+    if not isinstance(raw, list):
+        raw = DEFAULT_LP_LIST
 
     sanitized = [sanitize_lp_entry(item) for item in raw if isinstance(item, dict)]
     # Deduplicate by (name, category) preserving first occurrence
@@ -1622,9 +1849,9 @@ def load_lp_list() -> list:
 
 
 def save_lp_list(items: list) -> None:
+    # Persist to Windows registry; ignore failures silently
     try:
-        with open(LP_LIST_FILE, 'w', encoding='utf-8') as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
+        _write_lp_list_to_registry(items)
     except Exception:
         pass
 
